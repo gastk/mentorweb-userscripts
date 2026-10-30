@@ -35,6 +35,7 @@ O botão original de download é mantido. Links que não são de download (assin
 
 | Versão | Mudanças |
 |---|---|
+| 2.4 | Tipo do arquivo identificado pelos primeiros bytes (corrige PDF rotulado como imagem); HEIC/TIFF caem no download; aviso no lugar do ícone de imagem quebrada |
 | 2.3 | Cabeçalho neutro, URLs de atualização automática |
 | 2.1 | Imagens inteiras na modal, com zoom por clique |
 | 2.0 | Modal de pré-visualização, Shift+clique abre em nova aba |

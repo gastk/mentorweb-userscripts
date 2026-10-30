@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         (Mentor Web) Preview de anexos
 // @namespace    local.preview-anexos
-// @version      2.3
+// @version      2.4
 // @description  Pré-visualização de anexos em modal (Shift+clique abre direto em nova aba)
 // @match        https://*.mentorweb.ws/*/documentoentregueman.do*
 // @updateURL    https://raw.githubusercontent.com/gastk/mentorweb-userscripts/main/scripts/preview-anexos/preview-anexos.user.js
@@ -15,6 +15,8 @@
 
   const RE_DOWNLOAD = /^javascript:download\('([^']*)',\s*'([^']*)'\)/;
   const PREVIEWAVEL = /^(image\/|application\/pdf|text\/plain)/i;
+  // Imagens que o navegador não consegue exibir: caem no download original
+  const NAO_RENDERIZAVEL = /^image\/(heic|heif|tiff)/i;
 
   const ICONE =
     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1a56db" ' +
@@ -57,13 +59,42 @@
     return 'anexo-' + id;
   }
 
+  // Identifica o tipo real pelos primeiros bytes do arquivo. O servidor às vezes informa um
+  // Content-Type errado (ex.: PDF rotulado como image/png), então o header é só o plano B.
+  function detectaTipo(bytes, tipoHeader) {
+    const ascii = (ini, fim) => String.fromCharCode.apply(null, bytes.subarray(ini, fim));
+
+    // PDF: "%PDF-" nos primeiros 1024 bytes (alguns geradores põem lixo antes do cabeçalho)
+    if (ascii(0, Math.min(1024, bytes.length)).indexOf('%PDF-') >= 0) return 'application/pdf';
+
+    if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return 'image/jpeg';
+    if (bytes[0] === 0x89 && ascii(1, 4) === 'PNG') return 'image/png';
+    if (ascii(0, 4) === 'GIF8') return 'image/gif';
+    if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return 'image/webp';
+
+    // TIFF (o navegador não exibe)
+    if ((bytes[0] === 0x49 && bytes[1] === 0x49 && bytes[2] === 0x2A && bytes[3] === 0x00) ||
+        (bytes[0] === 0x4D && bytes[1] === 0x4D && bytes[2] === 0x00 && bytes[3] === 0x2A)) return 'image/tiff';
+
+    // Contêiner ISO (HEIC/HEIF de iPhone e AVIF): "ftyp" na posição 4, marca logo depois
+    if (ascii(4, 8) === 'ftyp') {
+      const marca = ascii(8, 12);
+      if (marca === 'avif') return 'image/avif';
+      if (/^(heic|heix|hevc|hevx|heim|heis|mif1|msf1)$/.test(marca)) return 'image/heic';
+    }
+
+    return tipoHeader;
+  }
+
   // Busca o arquivo e devolve { blobUrl, tipo, nome }, ou null se não for previsualizável
   async function buscaArquivo(id, propriedade) {
     const resp = await fetch(montaUrl(id, propriedade), { credentials: 'same-origin' });
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const tipo = (resp.headers.get('content-type') || '').split(';')[0].trim();
-    if (!PREVIEWAVEL.test(tipo)) return null;
-    const blob = new Blob([await resp.arrayBuffer()], { type: tipo });
+    const tipoHeader = (resp.headers.get('content-type') || '').split(';')[0].trim();
+    const buffer = await resp.arrayBuffer();
+    const tipo = detectaTipo(new Uint8Array(buffer), tipoHeader);
+    if (!PREVIEWAVEL.test(tipo) || NAO_RENDERIZAVEL.test(tipo)) return null;
+    const blob = new Blob([buffer], { type: tipo });
     return { blobUrl: URL.createObjectURL(blob), tipo, nome: nomeDoArquivo(resp, id) };
   }
 
@@ -186,6 +217,13 @@
           'object-fit:contain;cursor:zoom-in;');
         img.src = blobUrl;
         img.title = 'Clique para ampliar';
+        img.addEventListener('error', () => {
+          // Evita o ícone de imagem quebrada: avisa e deixa o botão Baixar à mão
+          corpo.style.cssText =
+            'flex:1 1 auto;min-height:0;background:#e8e8e8;display:flex;align-items:center;' +
+            'justify-content:center;font:14px Verdana,Arial,sans-serif;color:#444;text-align:center;padding:20px;';
+          corpo.textContent = 'Não foi possível exibir este arquivo. Use o botão Baixar.';
+        });
 
         let ampliado = false;
         img.addEventListener('click', () => {
